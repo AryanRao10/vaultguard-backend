@@ -1,6 +1,7 @@
 from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from supabase import create_client, Client
+import re
 import os
 import hashlib
 import io
@@ -31,6 +32,47 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- NEW: SMART REGEX EXTRACTION FUNCTION ---
+def extract_fdr_fields(raw_text):
+    extracted_data = {
+        "Bank Name": None,
+        "FDR Number": None,
+        "Amount": None,
+        "Issue Date": None,
+        "Maturity Date": None
+    }
+    
+    # Extract Bank Name (looks for any line containing "Bank")
+    bank_match = re.search(r'^(.*bank.*)$', raw_text, re.IGNORECASE | re.MULTILINE)
+    if bank_match:
+        extracted_data["Bank Name"] = bank_match.group(1).strip()
+        
+    # Extract FDR Number (looks for alphanumeric string after "Account Number")
+    fdr_match = re.search(r'Account Number:?\s*([A-Z0-9]+)', raw_text, re.IGNORECASE)
+    if fdr_match:
+        extracted_data["FDR Number"] = fdr_match.group(1)
+        
+    # Extract Amount (ignores currency symbols, grabs numbers and commas)
+    amount_match = re.search(r'Amount:?\s*[^\d]*([\d,]+)', raw_text, re.IGNORECASE)
+    if amount_match:
+        extracted_data["Amount"] = amount_match.group(1)
+        
+    # Extract Issue/Deposit Date (captures format like 20-Oct-2026)
+    issue_match = re.search(r'(?:Deposit|Issue) Date:?\s*([\w-]+)', raw_text, re.IGNORECASE)
+    if issue_match:
+        extracted_data["Issue Date"] = issue_match.group(1)
+        
+    # Extract Maturity Date
+    maturity_match = re.search(r'Maturity Date:?\s*([\w-]+)', raw_text, re.IGNORECASE)
+    if maturity_match:
+        extracted_data["Maturity Date"] = maturity_match.group(1)
+
+    # Calculate real confidence score based strictly on fields found
+    found_count = sum(1 for value in extracted_data.values() if value is not None)
+    confidence_score = int((found_count / 5) * 100)
+    
+    return extracted_data, confidence_score
+
 @app.get("/")
 def read_root():
     return {"status": "VaultGuard API is running securely."}
@@ -40,36 +82,45 @@ async def upload_fdr(file: UploadFile = File(...)):
     # 1. Read file bytes
     file_bytes = await file.read()
     
-    # 2. WOW FACTOR 2: SHA-256 Tamper-Evident Fingerprinting
+    # 2. SHA-256 Tamper-Evident Fingerprinting
     document_hash = hashlib.sha256(file_bytes).hexdigest()
     
-    extracted_text = ""
-    confidence_score = 100.00
-    extraction_method = "Digital Text (pdfplumber)"
-
-    # 3. WOW FACTOR 1: OCR Fallback Pipeline
+    raw_text = ""
+    
+    # 3. Native Digital PDF Extraction (pytesseract removed to prevent Render errors)
     try:
         with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-            first_page = pdf.pages[0]
-            extracted_text = first_page.extract_text()
-            
-            # Claude's Vulnerability Check: If text is empty, it is a scanned image.
-            if not extracted_text or len(extracted_text.strip()) < 20:
-                extraction_method = "Optical Character Recognition (pytesseract)"
-                confidence_score = 65.00 # Low score forces the "Manual Review" flag in the frontend
-                
-                # Rasterize the PDF page into an image and run Tesseract
-                img = first_page.to_image(resolution=300).original
-                # extracted_text = pytesseract.image_to_string(img)
-                
+            for page in pdf.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    raw_text += page_text + "\n"
+                    
     except Exception as e:
         return {"error": f"Document parsing failed: {str(e)}"}
 
+    # 4. Smart Data Parsing
+    structured_data, real_confidence = extract_fdr_fields(raw_text)
+
+    # 5. Database Logging (Sends to Supabase automatically)
+    try:
+        # Assuming you have a table named 'fdr_records' or similar. 
+        # Update the table name if yours is different.
+        supabase.table("fdr_records").insert({
+            "document_hash": document_hash,
+            "filename": file.filename,
+            "confidence_score": real_confidence,
+            "status": "Verified" if real_confidence == 100 else "Manual Review Needed"
+        }).execute()
+    except Exception as e:
+        # Fails silently so it doesn't crash the upload if Supabase is sleeping
+        print(f"Supabase logging failed: {str(e)}")
+
+    # 6. Final JSON Response exactly mapped to Next.js fields
     return {
+        "status": "success",
         "filename": file.filename,
-        "document_hash": document_hash,
-        "extraction_method": extraction_method,
-        "confidence_score": confidence_score,
-        "raw_text_preview": extracted_text[:200].replace('\n', ' ') + "...",
-        "message": "File processed through Dual-Pipeline OCR."
+        "hash": document_hash,             # Maps to frontend result.hash
+        "confidence_score": real_confidence, # Maps to frontend result.confidence_score
+        "structured_data": structured_data,  # Maps to the new form inputs
+        "raw_text": raw_text
     }
