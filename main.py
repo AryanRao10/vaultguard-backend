@@ -5,7 +5,6 @@ import os
 import hashlib
 import io
 import pdfplumber
-import pytesseract
 from dotenv import load_dotenv
 
 # Load Environment Variables from .env file
@@ -61,7 +60,7 @@ async def upload_fdr(file: UploadFile = File(...)):
                 
                 # Rasterize the PDF page into an image and run Tesseract
                 img = first_page.to_image(resolution=300).original
-                extracted_text = pytesseract.image_to_string(img)
+                # extracted_text = pytesseract.image_to_string(img)
                 
     except Exception as e:
         return {"error": f"Document parsing failed: {str(e)}"}
