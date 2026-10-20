@@ -21,7 +21,7 @@ app = FastAPI(title="VaultGuard AICTE API")
 
 origins = [
     "http://localhost:3000",
-    "https://beamish-pavlova-8e52cd.netlify.app",
+    "https://vaultguard-aicte.netlify.app",
 ]
 
 app.add_middleware(
