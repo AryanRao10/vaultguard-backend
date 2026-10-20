@@ -34,6 +34,9 @@ app.add_middleware(
 
 # --- NEW: SMART REGEX EXTRACTION FUNCTION ---
 def extract_fdr_fields(raw_text):
+    # 1. Flatten the text to destroy weird PDF line breaks and hidden spacing
+    text_flat = " ".join(raw_text.split())
+    
     extracted_data = {
         "Bank Name": None,
         "FDR Number": None,
@@ -42,32 +45,33 @@ def extract_fdr_fields(raw_text):
         "Maturity Date": None
     }
     
-    # Extract Bank Name (looks for any line containing "Bank")
-    bank_match = re.search(r'^(.*bank.*)$', raw_text, re.IGNORECASE | re.MULTILINE)
+    # 2. Ultra-forgiving Regex Patterns
+    # Matches "STATE BANK OF INDIA" or "NATIONAL MERCHANTS BANK"
+    bank_match = re.search(r'((?:[A-Za-z]+\s+){1,3}BANK(?:\s+OF\s+[A-Za-z]+)?)', text_flat, re.IGNORECASE)
     if bank_match:
         extracted_data["Bank Name"] = bank_match.group(1).strip()
         
-    # Extract FDR Number (looks for alphanumeric string after "Account Number")
-    fdr_match = re.search(r'Account Number:?\s*([A-Z0-9]+)', raw_text, re.IGNORECASE)
+    # Matches Account Number followed by any 6+ digits/letters
+    fdr_match = re.search(r'Account Number[^\dA-Z]*([A-Z0-9]{6,20})', text_flat, re.IGNORECASE)
     if fdr_match:
         extracted_data["FDR Number"] = fdr_match.group(1)
         
-    # Extract Amount (ignores currency symbols, grabs numbers and commas)
-    amount_match = re.search(r'Amount:?\s*[^\d]*([\d,]+)', raw_text, re.IGNORECASE)
+    # Matches Amount followed by numbers and commas
+    amount_match = re.search(r'Amount[^\d]*([\d,]{4,})', text_flat, re.IGNORECASE)
     if amount_match:
-        extracted_data["Amount"] = amount_match.group(1)
+        extracted_data["Amount"] = amount_match.group(1).strip(',')
         
-    # Extract Issue/Deposit Date (captures format like 20-Oct-2026)
-    issue_match = re.search(r'(?:Deposit|Issue) Date:?\s*([\w-]+)', raw_text, re.IGNORECASE)
+    # Matches Issue Date (e.g., 20-Oct-2026 or 20/10/2026)
+    issue_match = re.search(r'(?:Deposit|Issue) Date[^\d]*([0-9]{1,2}[-/\s][A-Za-z0-9]{2,10}[-/\s][0-9]{2,4})', text_flat, re.IGNORECASE)
     if issue_match:
         extracted_data["Issue Date"] = issue_match.group(1)
         
-    # Extract Maturity Date
-    maturity_match = re.search(r'Maturity Date:?\s*([\w-]+)', raw_text, re.IGNORECASE)
+    # Matches Maturity Date 
+    maturity_match = re.search(r'Maturity Date[^\d]*([0-9]{1,2}[-/\s][A-Za-z0-9]{2,10}[-/\s][0-9]{2,4})', text_flat, re.IGNORECASE)
     if maturity_match:
         extracted_data["Maturity Date"] = maturity_match.group(1)
 
-    # Calculate real confidence score based strictly on fields found
+    # 3. Calculate true confidence score
     found_count = sum(1 for value in extracted_data.values() if value is not None)
     confidence_score = int((found_count / 5) * 100)
     
