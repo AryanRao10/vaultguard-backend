@@ -19,9 +19,14 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 # Initialize FastAPI App
 app = FastAPI(title="VaultGuard AICTE API")
 
+origins = [
+    "http://localhost:3000",
+    "https://beamish-pavlova-8e52cd.netlify.app",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=origins, 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
