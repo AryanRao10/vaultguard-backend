@@ -1,5 +1,7 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional
 from supabase import create_client, Client
 import re
 import os
@@ -82,7 +84,10 @@ def read_root():
     return {"status": "VaultGuard API is running securely."}
 
 @app.post("/api/v1/upload-fdr")
-async def upload_fdr(file: UploadFile = File(...)):
+async def upload_fdr(
+    file: UploadFile = File(...),
+    parent_fdr_id: Optional[str] = Form(None)
+):
     # 1. Read file bytes
     file_bytes = await file.read()
     
@@ -106,14 +111,14 @@ async def upload_fdr(file: UploadFile = File(...)):
     structured_data, real_confidence = extract_fdr_fields(raw_text)
 
     # 5. Database Logging (Sends to Supabase automatically)
+    # 5. Database Logging (Sends to Supabase automatically)
     try:
-        # Assuming you have a table named 'fdr_records' or similar. 
-        # Update the table name if yours is different.
         supabase.table("fdr_records").insert({
             "document_hash": document_hash,
             "filename": file.filename,
             "confidence_score": real_confidence,
-            "status": "Verified" if real_confidence == 100 else "Manual Review Needed"
+            "status": "Verified" if real_confidence == 100 else "Manual Review Needed",
+            "parent_fdr_id": parent_fdr_id
         }).execute()
     except Exception as e:
         # Fails silently so it doesn't crash the upload if Supabase is sleeping
@@ -128,3 +133,15 @@ async def upload_fdr(file: UploadFile = File(...)):
         "structured_data": structured_data,  # Maps to the new form inputs
         "raw_text": raw_text
     }
+
+# --- NEW: REFUND & STATUS UPDATE ENDPOINT ---
+class StatusUpdate(BaseModel):
+    status: str
+
+@app.patch("/api/v1/fdr/{fdr_id}/status")
+async def update_fdr_status(fdr_id: str, payload: StatusUpdate):
+    try:
+        response = supabase.table("fdr_records").update({"status": payload.status}).eq("id", fdr_id).execute()
+        return {"status": "success", "message": "Status updated successfully", "data": response.data}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
